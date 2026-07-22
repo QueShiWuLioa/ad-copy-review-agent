@@ -12,7 +12,7 @@ def evaluate(df):
     rows=[]; tp=fp=fn=0
     for _, row in df.iterrows():
         expected=set() if row.expected_codes=="normal" else set(row.expected_codes.split("|"))
-        predicted={item["code"] for item in review_copy(row["copy"])["items"]}
+        predicted={item["code"] for item in review_copy(row["copy"], row.get("audience", ""), row.get("goal", "获取线索"))["items"]}
         tp+=len(expected & predicted); fp+=len(predicted-expected); fn+=len(expected-predicted)
         rows.append({"文案":row["copy"],"标准答案":"、".join(sorted(expected)) or "正常","评审结果":"、".join(sorted(predicted)) or "正常","完全匹配":expected==predicted})
     precision=tp/(tp+fp) if tp+fp else 0; recall=tp/(tp+fn) if tp+fn else 0

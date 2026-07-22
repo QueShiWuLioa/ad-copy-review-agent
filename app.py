@@ -15,9 +15,9 @@ with left:
     text=st.text_area("广告文案",value="全网第一的企业服务工具，百分百提升销售效率！",height=150,max_chars=300)
     audience=st.text_input("目标人群",value="中小企业销售负责人")
     goal=st.selectbox("转化目标",["获取线索","促进购买","产品试用"])
-    run=st.button("开始评审",use_container_width=True)
+    st.caption("修改任一输入后，结果会自动更新。")
 with right:
-    result=review_copy(text)
+    result=review_copy(text,audience,goal)
     cols=st.columns(3); cols[0].metric("综合评分",result["score"]); cols[1].metric("问题数",len(result["items"])); cols[2].metric("高风险",result["risk_count"])
     if not result["items"]: st.success("当前基线未发现明显问题。")
     for item in result["items"]:
