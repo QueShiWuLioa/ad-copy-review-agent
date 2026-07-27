@@ -16,7 +16,17 @@ def evaluate(df):
         tp+=len(expected & predicted); fp+=len(predicted-expected); fn+=len(expected-predicted)
         rows.append({"文案":row["copy"],"标准答案":"、".join(sorted(expected)) or "正常","评审结果":"、".join(sorted(predicted)) or "正常","完全匹配":expected==predicted})
     precision=tp/(tp+fp) if tp+fp else 0; recall=tp/(tp+fn) if tp+fn else 0
-    report={"样本数":len(df),"精确率":round(precision,4),"召回率":round(recall,4),"F1":round(2*precision*recall/(precision+recall),4) if precision+recall else 0,"完全匹配率":round(sum(x["完全匹配"] for x in rows)/len(rows),4)}
+    report={
+        "样本数":len(df),
+        "真阳性标签":tp,
+        "假阳性标签":fp,
+        "假阴性标签":fn,
+        "正常样本数":int((df["expected_codes"]=="normal").sum()),
+        "精确率":round(precision,4),
+        "召回率":round(recall,4),
+        "F1":round(2*precision*recall/(precision+recall),4) if precision+recall else 0,
+        "完全匹配率":round(sum(x["完全匹配"] for x in rows)/len(rows),4),
+    }
     return report,pd.DataFrame(rows)
 
 if __name__=="__main__":
