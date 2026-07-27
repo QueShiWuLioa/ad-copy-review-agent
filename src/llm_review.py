@@ -83,23 +83,78 @@ def validate_model_result(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def review_with_model(text: str, audience: str, goal: str, api_key: str, base_url: str, model: str) -> dict[str, Any]:
+def _extract_responses_content(value: dict[str, Any]) -> str:
+    if isinstance(value.get("output_text"), str):
+        return value["output_text"]
+    for output in value.get("output", []):
+        if not isinstance(output, dict):
+            continue
+        for content in output.get("content", []):
+            if isinstance(content, dict) and content.get("type") == "output_text" and isinstance(content.get("text"), str):
+                return content["text"]
+    raise ModelReviewError("Responses API返回内容中没有 output_text")
+
+
+def review_with_model(
+    text: str,
+    audience: str,
+    goal: str,
+    api_key: str,
+    base_url: str,
+    model: str,
+    wire_api: str = "chat_completions",
+    reasoning_effort: str = "",
+) -> dict[str, Any]:
     if not api_key:
         raise ModelReviewError("未配置模型 API 密钥")
-    endpoint = f"{base_url.rstrip('/')}/chat/completions"
-    payload = {
-        "model": model,
-        "temperature": 0.2,
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps({"广告文案": text, "目标人群": audience, "转化目标": goal}, ensure_ascii=False)},
-        ],
-    }
+    user_content = json.dumps({"广告文案": text, "目标人群": audience, "转化目标": goal}, ensure_ascii=False)
+    if wire_api == "responses":
+        endpoint = f"{base_url.rstrip('/')}/responses"
+        payload = {"model": model, "instructions": SYSTEM_PROMPT, "input": user_content, "store": False}
+        if reasoning_effort:
+            payload["reasoning"] = {"effort": reasoning_effort}
+    elif wire_api == "chat_completions":
+        endpoint = f"{base_url.rstrip('/')}/chat/completions"
+        payload = {
+            "model": model,
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+        }
+    else:
+        raise ModelReviewError("不支持的接口类型")
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     try:
-        response = requests.post(endpoint, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json=payload, timeout=45)
-        response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
-    except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
-        raise ModelReviewError("模型服务调用失败，请检查接口配置或稍后重试") from exc
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=45)
+        if response.status_code == 400 and wire_api == "chat_completions":
+            fallback_payload = dict(payload)
+            fallback_payload.pop("response_format", None)
+            response = requests.post(endpoint, headers=headers, json=fallback_payload, timeout=45)
+    except requests.Timeout as exc:
+        raise ModelReviewError("模型服务响应超时，请稍后重试") from exc
+    except requests.ConnectionError as exc:
+        raise ModelReviewError("无法连接模型服务，请检查接口地址和网络") from exc
+    except requests.RequestException as exc:
+        raise ModelReviewError("模型请求发送失败，请稍后重试") from exc
+
+    status_messages = {
+        400: "请求参数不被模型服务支持，请检查模型名称",
+        401: "API密钥无效或已失效",
+        402: "模型账户余额不足或未开通计费",
+        403: "API密钥没有调用该模型的权限",
+        404: "接口地址或模型名称不存在",
+        408: "模型服务请求超时",
+        429: "调用过于频繁或额度已用完，请稍后重试",
+    }
+    if response.status_code >= 400:
+        message = status_messages.get(response.status_code, f"模型服务返回错误（HTTP {response.status_code}）")
+        raise ModelReviewError(message)
+    try:
+        response_value = response.json()
+        content = _extract_responses_content(response_value) if wire_api == "responses" else response_value["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise ModelReviewError("模型服务返回格式不兼容，请确认使用 Chat Completions 接口") from exc
     return validate_model_result(_extract_json(content))
