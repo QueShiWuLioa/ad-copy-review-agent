@@ -14,8 +14,11 @@ ROOT=Path(__file__).parent
 
 def review_with_compatible_adapter(text,audience,goal,api_key,base_url,model_name,wire_api,reasoning_effort,timeout_seconds):
     """Use the new adapter when present; keep XNova working with an old deployed module."""
-    if "wire_api" in inspect.signature(review_with_model).parameters:
+    adapter_parameters=inspect.signature(review_with_model).parameters
+    if "timeout_seconds" in adapter_parameters:
         return review_with_model(text,audience,goal,api_key,base_url,model_name,wire_api,reasoning_effort,timeout_seconds)
+    if wire_api!="responses" and "wire_api" in adapter_parameters:
+        return review_with_model(text,audience,goal,api_key,base_url,model_name,wire_api,reasoning_effort)
     if wire_api!="responses":
         return review_with_model(text,audience,goal,api_key,base_url,model_name)
 
@@ -109,7 +112,7 @@ if run_model:
     except ModelReviewError as exc:
         st.error(f"{exc}，已保留规则审核结果。")
     except TypeError:
-        st.error("模型适配器版本与页面不一致，请同步更新 src/llm_review.py；已保留规则审核结果。")
+        st.error("智能审核返回了不兼容的数据类型，已保留规则审核结果。请查看应用日志定位具体字段。")
     except Exception:
         st.error("智能审核发生未预期错误，已保留规则审核结果。请查看应用日志定位问题。")
 
