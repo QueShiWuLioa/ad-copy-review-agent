@@ -18,8 +18,10 @@ def config_value(name, default=""):
         return default
 
 deployed_api_key=config_value("LLM_API_KEY")
-default_base_url=config_value("LLM_BASE_URL","https://api.deepseek.com/v1")
-default_model_name=config_value("LLM_MODEL","deepseek-chat")
+default_base_url=config_value("LLM_BASE_URL","https://api.xnova.online")
+default_model_name=config_value("LLM_MODEL","gpt-5.5")
+default_wire_api=config_value("LLM_WIRE_API","responses")
+default_reasoning_effort=config_value("LLM_REASONING_EFFORT","xhigh")
 
 st.set_page_config(page_title="广告文案智能评审",page_icon="✍️",layout="wide")
 st.markdown("""<style>.stApp{background:#f5f7f8}.block-container{max-width:1280px;padding-top:2rem}h1{font-size:1.75rem!important;letter-spacing:0!important}[data-testid=stMetric]{background:white;border:1px solid #dfe4e8;border-top:3px solid #087e6b;border-radius:6px;padding:.8rem 1rem}[data-testid=stVerticalBlockBorderWrapper]{background:white;border-left:4px solid #c47a16!important;border-radius:6px!important}.stButton>button{border-radius:5px;background:#087e6b;color:white;border:0}@media(max-width:760px){.block-container{padding:3.75rem .75rem 2rem}}</style>""",unsafe_allow_html=True)
@@ -32,12 +34,15 @@ with st.sidebar:
         session_api_key=st.text_input("API 密钥",value="",type="password",help="仅用于当前浏览器会话，不写入代码和结果文件。")
         base_url=st.text_input("接口地址",value=default_base_url)
         model_name=st.text_input("模型名称",value=default_model_name)
-        st.caption("支持 OpenAI Chat Completions 格式。公共网站中填写的密钥会发送到本应用服务器，请仅在你信任的部署中使用。")
+        wire_label=st.selectbox("接口类型",["Responses API","Chat Completions"],index=0 if default_wire_api=="responses" else 1)
+        wire_api="responses" if wire_label=="Responses API" else "chat_completions"
+        reasoning_effort=st.selectbox("推理强度",["none","low","medium","high","xhigh"],index=["none","low","medium","high","xhigh"].index(default_reasoning_effort) if default_reasoning_effort in ["none","low","medium","high","xhigh"] else 0,disabled=wire_api!="responses")
+        st.caption("XNova使用 Responses API。公共网站中填写的密钥会发送到本应用服务器，请仅在你信任的部署中使用。")
     api_key=session_api_key or deployed_api_key
     model_ready=bool(api_key and base_url and model_name)
     use_model=st.toggle("启用大模型增强",value=False,disabled=not model_ready)
     if model_ready:
-        st.success(f"模型已连接：{model_name}")
+        st.success(f"配置已就绪：{model_name} · {wire_label}")
         st.caption("仅点击“运行智能审核”时调用模型。")
     else:
         st.info("当前使用规则基线。可在上方填写 API配置，或由部署者在 Secrets中配置。")
@@ -51,11 +56,11 @@ with left:
     st.caption("规则结果自动更新；模型审核需要主动运行，避免重复产生费用。")
 
 rule_result=review_copy(text,audience,goal)
-signature=(text,audience,goal,base_url,model_name)
+signature=(text,audience,goal,base_url,model_name,wire_api,reasoning_effort)
 if run_model:
     try:
         with st.spinner("模型正在审核文案..."):
-            st.session_state["model_review_result"]=review_with_model(text,audience,goal,api_key,base_url,model_name)
+            st.session_state["model_review_result"]=review_with_model(text,audience,goal,api_key,base_url,model_name,wire_api,reasoning_effort if reasoning_effort!="none" else "")
             st.session_state["model_review_signature"]=signature
     except ModelReviewError as exc:
         st.error(f"{exc}，已保留规则审核结果。")

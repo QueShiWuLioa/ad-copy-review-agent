@@ -20,11 +20,13 @@ streamlit run app.py
 
 ```toml
 LLM_API_KEY = "你的密钥"
-LLM_BASE_URL = "https://api.deepseek.com/v1"
-LLM_MODEL = "deepseek-chat"
+LLM_BASE_URL = "https://api.xnova.online"
+LLM_MODEL = "gpt-5.5"
+LLM_WIRE_API = "responses"
+LLM_REASONING_EFFORT = "xhigh"
 ```
 
-也可以替换为其他兼容 OpenAI Chat Completions 格式的服务。不要把 `secrets.toml` 上传到 GitHub。模型调用可能产生费用，页面只在用户主动点击“运行智能审核”时调用。
+以上配置适用于 XNova。也可以在网站中切换为其他兼容 OpenAI Chat Completions 格式的服务。不要把 `secrets.toml` 上传到 GitHub。模型调用可能产生费用，页面只在用户主动点击“运行智能审核”时调用。
 
 ## A/B 实验
 
