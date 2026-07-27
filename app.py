@@ -1,6 +1,9 @@
 from pathlib import Path
 import os
+import inspect
+import json
 import pandas as pd
+import requests
 import streamlit as st
 from src.review import generate_variants, review_copy
 from src.evaluate import evaluate
@@ -8,6 +11,45 @@ from src.llm_review import ModelReviewError, review_with_model
 from src.ab_test import analyze_ab_test
 
 ROOT=Path(__file__).parent
+
+def review_with_compatible_adapter(text,audience,goal,api_key,base_url,model_name,wire_api,reasoning_effort,timeout_seconds):
+    """Use the new adapter when present; keep XNova working with an old deployed module."""
+    if "wire_api" in inspect.signature(review_with_model).parameters:
+        return review_with_model(text,audience,goal,api_key,base_url,model_name,wire_api,reasoning_effort,timeout_seconds)
+    if wire_api!="responses":
+        return review_with_model(text,audience,goal,api_key,base_url,model_name)
+
+    from src.llm_review import SYSTEM_PROMPT, validate_model_result, _extract_json
+    endpoint=f"{base_url.rstrip('/')}/responses"
+    payload={
+        "model":model_name,
+        "instructions":SYSTEM_PROMPT,
+        "input":json.dumps({"广告文案":text,"目标人群":audience,"转化目标":goal},ensure_ascii=False),
+        "store":False,
+    }
+    if reasoning_effort:
+        payload["reasoning"]={"effort":reasoning_effort}
+    try:
+        response=requests.post(endpoint,headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"},json=payload,timeout=timeout_seconds)
+    except requests.Timeout as exc:
+        raise ModelReviewError("模型服务响应超时，请稍后重试") from exc
+    except requests.RequestException as exc:
+        raise ModelReviewError("无法连接XNova，请检查网络和接口地址") from exc
+    errors={400:"请求参数不受支持，请检查模型名称",401:"XNova API密钥无效",402:"XNova账户余额不足",403:"密钥没有模型权限",404:"XNova接口或模型不存在",429:"调用过频或额度已用完"}
+    if response.status_code>=400:
+        raise ModelReviewError(errors.get(response.status_code,f"XNova返回错误（HTTP {response.status_code}）"))
+    try:
+        value=response.json()
+        content=value.get("output_text")
+        if not content:
+            for output in value.get("output",[]):
+                for part in output.get("content",[]):
+                    if part.get("type")=="output_text": content=part.get("text"); break
+                if content: break
+        if not content: raise ValueError("missing output_text")
+        return validate_model_result(_extract_json(content))
+    except (ValueError,TypeError,KeyError) as exc:
+        raise ModelReviewError("XNova返回格式不兼容或模型未按要求返回JSON") from exc
 
 def config_value(name, default=""):
     if os.getenv(name):
@@ -21,7 +63,7 @@ deployed_api_key=config_value("LLM_API_KEY")
 default_base_url=config_value("LLM_BASE_URL","https://api.xnova.online")
 default_model_name=config_value("LLM_MODEL","gpt-5.5")
 default_wire_api=config_value("LLM_WIRE_API","responses")
-default_reasoning_effort=config_value("LLM_REASONING_EFFORT","xhigh")
+default_reasoning_effort=config_value("LLM_REASONING_EFFORT","medium")
 
 st.set_page_config(page_title="广告文案智能评审",page_icon="✍️",layout="wide")
 st.markdown("""<style>.stApp{background:#f5f7f8}.block-container{max-width:1280px;padding-top:2rem}h1{font-size:1.75rem!important;letter-spacing:0!important}[data-testid=stMetric]{background:white;border:1px solid #dfe4e8;border-top:3px solid #087e6b;border-radius:6px;padding:.8rem 1rem}[data-testid=stVerticalBlockBorderWrapper]{background:white;border-left:4px solid #c47a16!important;border-radius:6px!important}.stButton>button{border-radius:5px;background:#087e6b;color:white;border:0}@media(max-width:760px){.block-container{padding:3.75rem .75rem 2rem}}</style>""",unsafe_allow_html=True)
@@ -37,6 +79,8 @@ with st.sidebar:
         wire_label=st.selectbox("接口类型",["Responses API","Chat Completions"],index=0 if default_wire_api=="responses" else 1)
         wire_api="responses" if wire_label=="Responses API" else "chat_completions"
         reasoning_effort=st.selectbox("推理强度",["none","low","medium","high","xhigh"],index=["none","low","medium","high","xhigh"].index(default_reasoning_effort) if default_reasoning_effort in ["none","low","medium","high","xhigh"] else 0,disabled=wire_api!="responses")
+        timeout_seconds=st.number_input("超时时间（秒）",min_value=30,max_value=300,value=180,step=30)
+        st.caption("文案审核建议使用 medium；xhigh通常更慢且费用更高。超时后不会自动重试，以免重复计费。")
         st.caption("XNova使用 Responses API。公共网站中填写的密钥会发送到本应用服务器，请仅在你信任的部署中使用。")
     api_key=session_api_key or deployed_api_key
     model_ready=bool(api_key and base_url and model_name)
@@ -56,11 +100,11 @@ with left:
     st.caption("规则结果自动更新；模型审核需要主动运行，避免重复产生费用。")
 
 rule_result=review_copy(text,audience,goal)
-signature=(text,audience,goal,base_url,model_name,wire_api,reasoning_effort)
+signature=(text,audience,goal,base_url,model_name,wire_api,reasoning_effort,timeout_seconds)
 if run_model:
     try:
         with st.spinner("模型正在审核文案..."):
-            st.session_state["model_review_result"]=review_with_model(text,audience,goal,api_key,base_url,model_name,wire_api,reasoning_effort if reasoning_effort!="none" else "")
+            st.session_state["model_review_result"]=review_with_compatible_adapter(text,audience,goal,api_key,base_url,model_name,wire_api,reasoning_effort if reasoning_effort!="none" else "",timeout_seconds)
             st.session_state["model_review_signature"]=signature
     except ModelReviewError as exc:
         st.error(f"{exc}，已保留规则审核结果。")
