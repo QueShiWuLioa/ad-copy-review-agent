@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from src.llm_review import ModelReviewError, _extract_json, review_with_model, validate_model_result
+from src.llm_review import ModelReviewError, _extract_json, _extract_responses_content, review_with_model, validate_model_result
 
 
 def valid_result():
@@ -44,6 +44,7 @@ class ModelValidationTests(unittest.TestCase):
     @patch("src.llm_review.requests.post")
     def test_model_call_uses_compatible_endpoint(self, post):
         response = Mock()
+        response.status_code = 200
         response.raise_for_status.return_value = None
         response.json.return_value = {"choices": [{"message": {"content": __import__("json").dumps(valid_result(), ensure_ascii=False)}}]}
         post.return_value = response
@@ -52,6 +53,41 @@ class ModelValidationTests(unittest.TestCase):
         args, kwargs = post.call_args
         self.assertEqual(args[0], "https://example.com/v1/chat/completions")
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer secret")
+
+    @patch("src.llm_review.requests.post")
+    def test_invalid_key_has_clear_message(self, post):
+        response = Mock(); response.status_code = 401
+        post.return_value = response
+        with self.assertRaisesRegex(ModelReviewError, "API密钥无效"):
+            review_with_model("测试文案", "销售团队", "获取线索", "bad-key", "https://example.com/v1", "demo-model")
+
+    @patch("src.llm_review.requests.post")
+    def test_unsupported_json_mode_retries_without_response_format(self, post):
+        rejected = Mock(); rejected.status_code = 400
+        accepted = Mock(); accepted.status_code = 200
+        accepted.json.return_value = {"choices": [{"message": {"content": __import__("json").dumps(valid_result(), ensure_ascii=False)}}]}
+        post.side_effect = [rejected, accepted]
+        result = review_with_model("测试文案", "销售团队", "获取线索", "secret", "https://example.com/v1", "demo-model")
+        self.assertEqual(result["score"], 72)
+        self.assertNotIn("response_format", post.call_args_list[1].kwargs["json"])
+
+    @patch("src.llm_review.requests.post")
+    def test_xnova_responses_api_request(self, post):
+        response = Mock(); response.status_code = 200
+        response.json.return_value = {"output_text": __import__("json").dumps(valid_result(), ensure_ascii=False)}
+        post.return_value = response
+        result = review_with_model("测试文案", "销售团队", "获取线索", "secret", "https://api.xnova.online", "gpt-5.5", "responses", "xhigh", 180, "医疗健康")
+        self.assertEqual(result["score"], 72)
+        args, kwargs = post.call_args
+        self.assertEqual(args[0], "https://api.xnova.online/responses")
+        self.assertEqual(kwargs["json"]["reasoning"], {"effort": "xhigh"})
+        self.assertFalse(kwargs["json"]["store"])
+        self.assertEqual(kwargs["timeout"], 180)
+        self.assertIn("医疗健康", kwargs["json"]["input"])
+
+    def test_nested_responses_output_is_supported(self):
+        value = {"output": [{"type": "message", "content": [{"type": "output_text", "text": "result"}]}]}
+        self.assertEqual(_extract_responses_content(value), "result")
 
 
 if __name__ == "__main__":

@@ -12,9 +12,40 @@ from src.ab_test import analyze_ab_test
 
 ROOT=Path(__file__).parent
 
-def review_with_compatible_adapter(text,audience,goal,api_key,base_url,model_name,wire_api,reasoning_effort,timeout_seconds):
+def review_with_industry_compat(text,audience,goal,industry):
+    """Keep industry screening available when the deployed review module is old."""
+    if "industry" in inspect.signature(review_copy).parameters:
+        return review_copy(text,audience,goal,industry)
+    result=review_copy(text,audience,goal)
+    legacy_rules={
+        "医疗健康":("medical_guarantee",["根治","治愈率","药到病除","无副作用","包治"],"删除无法证实的疗效保证，并核验医疗广告资质。"),
+        "金融服务":("financial_guarantee",["保本","稳赚","零风险","保证收益","稳赚不赔"],"删除保本或收益保证，并核验金融广告资质。"),
+        "教育培训":("education_guarantee",["保过","包就业","保证提分","必上岸","不过退款"],"删除结果保证，改为可验证的课程或服务说明。"),
+    }
+    if industry in legacy_rules:
+        code,terms,suggestion=legacy_rules[industry]
+        hits=[term for term in terms if term in text]
+        if hits:
+            result["items"].append({"code":code,"category":"合法性风险","severity":"高","evidence":f"包含：{'、'.join(hits)}","suggestion":suggestion})
+        result["items"].append({"code":"qualification_review","category":"资质核验","severity":"低","evidence":f"当前选择的行业为“{industry}”","suggestion":"上线前核对主体资质、产品许可、证明材料及平台最新规则。"})
+    general_legal_rules=[
+        ("privacy_violation",["无需授权获取手机号","自动读取通讯录","无需同意收集"],"删除未经同意收集个人信息的表述，并核验隐私授权流程。"),
+        ("fake_engagement",["刷单","返现好评","虚假评价"],"删除诱导虚假交易或评价的内容，并核验平台规则。"),
+    ]
+    existing_codes={item["code"] for item in result["items"]}
+    for code,terms,suggestion in general_legal_rules:
+        hits=[term for term in terms if term in text]
+        if hits and code not in existing_codes:
+            result["items"].append({"code":code,"category":"合法性风险","severity":"高","evidence":f"包含：{'、'.join(hits)}","suggestion":suggestion})
+    deduction=sum({"高":22,"中":12,"低":6}[item["severity"]] for item in result["items"])
+    result.update({"score":max(0,100-deduction),"risk_count":sum(item["severity"]=="高" for item in result["items"]),"industry":industry})
+    return result
+
+def review_with_compatible_adapter(text,audience,goal,industry,api_key,base_url,model_name,wire_api,reasoning_effort,timeout_seconds):
     """Use the new adapter when present; keep XNova working with an old deployed module."""
     adapter_parameters=inspect.signature(review_with_model).parameters
+    if "industry" in adapter_parameters:
+        return review_with_model(text,audience,goal,api_key,base_url,model_name,wire_api,reasoning_effort,timeout_seconds,industry)
     if "timeout_seconds" in adapter_parameters:
         return review_with_model(text,audience,goal,api_key,base_url,model_name,wire_api,reasoning_effort,timeout_seconds)
     if wire_api!="responses" and "wire_api" in adapter_parameters:
@@ -26,8 +57,8 @@ def review_with_compatible_adapter(text,audience,goal,api_key,base_url,model_nam
     endpoint=f"{base_url.rstrip('/')}/responses"
     payload={
         "model":model_name,
-        "instructions":SYSTEM_PROMPT,
-        "input":json.dumps({"广告文案":text,"目标人群":audience,"转化目标":goal},ensure_ascii=False),
+        "instructions":SYSTEM_PROMPT+f"\n当前行业为{industry}。请检查行业相关合法性风险；兼容旧校验器时将此类问题归入合规风险。",
+        "input":json.dumps({"广告文案":text,"目标人群":audience,"转化目标":goal,"行业类别":industry},ensure_ascii=False),
         "store":False,
     }
     if reasoning_effort:
@@ -97,17 +128,25 @@ with st.sidebar:
 left,right=st.columns([1,1])
 with left:
     text=st.text_area("广告文案",value="全网第一的企业服务工具，百分百提升销售效率！",height=150,max_chars=300)
-    audience=st.text_input("目标人群",value="中小企业销售负责人")
+    audience_choice=st.selectbox("目标人群",["中小企业销售负责人","企业市场负责人","电商运营人员","个人消费者","自定义人群"])
+    audience=st.text_input("自定义目标人群",value="",placeholder="例如：北京地区初创企业创始人") if audience_choice=="自定义人群" else audience_choice
+    industry=st.selectbox("行业类别",["通用","电商零售","教育培训","医疗健康","金融服务"])
     goal=st.selectbox("转化目标",["获取线索","促进购买","产品试用"])
+    goal_descriptions={
+        "获取线索":"引导用户咨询、预约或提交信息。典型CTA：立即咨询、预约、获取方案；关注线索转化率和CPA。",
+        "促进购买":"推动用户下单或支付。典型CTA：立即购买、加入购物车、领取优惠；关注购买CVR和ROAS。",
+        "产品试用":"推动用户开始体验产品。典型CTA：免费试用、申请试用、立即体验；关注试用启动率和后续激活率。",
+    }
+    st.info(goal_descriptions[goal])
     run_model=st.button("运行智能审核",use_container_width=True,disabled=not use_model)
     st.caption("规则结果自动更新；模型审核需要主动运行，避免重复产生费用。")
 
-rule_result=review_copy(text,audience,goal)
-signature=(text,audience,goal,base_url,model_name,wire_api,reasoning_effort,timeout_seconds)
+rule_result=review_with_industry_compat(text,audience,goal,industry)
+signature=(text,audience,goal,industry,base_url,model_name,wire_api,reasoning_effort,timeout_seconds)
 if run_model:
     try:
         with st.spinner("模型正在审核文案..."):
-            st.session_state["model_review_result"]=review_with_compatible_adapter(text,audience,goal,api_key,base_url,model_name,wire_api,reasoning_effort if reasoning_effort!="none" else "",timeout_seconds)
+            st.session_state["model_review_result"]=review_with_compatible_adapter(text,audience,goal,industry,api_key,base_url,model_name,wire_api,reasoning_effort if reasoning_effort!="none" else "",timeout_seconds)
             st.session_state["model_review_signature"]=signature
     except ModelReviewError as exc:
         st.error(f"{exc}，已保留规则审核结果。")
@@ -144,9 +183,20 @@ with right:
             st.write(f"**证据：** {item['evidence']}")
             st.write(f"**建议：** {item['suggestion']}")
 
-review_tab,variant_tab,experiment_tab,evaluation_tab,method_tab=st.tabs(["评审结果","A/B文案","A/B实验","评测结果","方法说明"])
+review_tab,legal_tab,variant_tab,experiment_tab,evaluation_tab,method_tab=st.tabs(["评审结果","合法性审核","A/B文案","A/B实验","评测结果","方法说明"])
 with review_tab:
     st.dataframe(pd.DataFrame(result["items"])[["category","severity","evidence","suggestion"]].rename(columns={"category":"类别","severity":"风险","evidence":"证据","suggestion":"建议"}) if result["items"] else pd.DataFrame(),use_container_width=True,hide_index=True)
+with legal_tab:
+    legal_items=[item for item in result["items"] if item["category"] in {"合规风险","合法性风险","资质核验"}]
+    st.warning("本模块仅做广告风险初筛，不构成法律意见，也不能替代广告平台审核、律师审查或监管部门认定。")
+    st.write(f"当前行业：**{industry}**；发现 **{len(legal_items)}** 个需要关注的合规或资质信号。")
+    if not legal_items:
+        st.success("当前规则和模型结果未发现明确合法性风险，但上线前仍需核对平台最新政策。")
+    for item in legal_items:
+        with st.container(border=True):
+            st.subheader(f"{item['category']} · {item['severity']}风险")
+            st.write(f"**证据：** {item['evidence']}")
+            st.write(f"**处理建议：** {item['suggestion']}")
 with variant_tab:
     st.info("这里生成的是两个待测试文案，不代表已经完成 A/B实验。请在“A/B实验”中录入真实投放结果。")
     variants=model_result["variants"] if use_model and model_result else generate_variants(text,audience,goal)
@@ -201,4 +251,4 @@ with evaluation_tab:
         st.caption("这些结果只说明当前规则在这12条合成样本上的表现，不能代表真实广告审核准确率，也不能作为模型效果数据。")
     st.dataframe(details[~details["完全匹配"]],use_container_width=True,hide_index=True)
 with method_tab:
-    st.markdown("- 规则基线负责确定性风险、CTA和格式检查。\n- 模型增强负责语义审核与改写，输出经过结构校验，失败时自动降级。\n- 当前评测指标只针对规则基线，不冒充模型评测结果。\n- A/B文案只是实验候选；A/B实验页使用双样本比例检验分析真实数据。\n- API密钥可由用户在当前会话输入，或从环境变量、Streamlit Secrets读取，不写入代码仓库。")
+    st.markdown("- 规则基线负责确定性风险、行业高风险词、CTA和格式检查。\n- 合法性审核仅做风险初筛，不构成法律意见或平台最终审核结论。\n- 模型增强负责语义审核与改写，输出经过结构校验，失败时自动降级。\n- 当前评测指标只针对规则基线，不冒充模型评测结果。\n- A/B文案只是实验候选；A/B实验页使用双样本比例检验分析真实数据。\n- API密钥可由用户在当前会话输入，或从环境变量、Streamlit Secrets读取，不写入代码仓库。")

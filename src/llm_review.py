@@ -19,7 +19,7 @@ SYSTEM_PROMPT = """你是谨慎的中文广告文案审核助手。你只能基�
   "score": 0到100的整数,
   "summary": "不超过60字的总体判断",
   "confidence": 0到1的小数,
-  "items": [{"code":"英文短代码","category":"合规风险/价值表达/目标匹配/人群表达/可读性之一","severity":"高/中/低","evidence":"必须引用原文或明确指出缺失信息","suggestion":"可执行且不虚构事实的建议"}],
+  "items": [{"code":"英文短代码","category":"合规风险/合法性风险/资质核验/价值表达/目标匹配/人群表达/可读性之一","severity":"高/中/低","evidence":"必须引用原文或明确指出缺失信息","suggestion":"可执行且不虚构事实的建议"}],
   "variants": [{"name":"版本名称","copy":"改写文案","hypothesis":"需要通过A/B测试验证的假设"}]
 }
 要求：variants 恰好2个；高风险只用于明显绝对化承诺、虚假保证或强监管风险；信息不足时明确说需要人工核验；生成版本不得添加未经提供的数字、资质、优惠或效果承诺。"""
@@ -56,7 +56,7 @@ def validate_model_result(value: dict[str, Any]) -> dict[str, Any]:
         raise ModelReviewError("模型返回的问题或版本数量不符合要求")
 
     clean_items = []
-    allowed_categories = {"合规风险", "价值表达", "目标匹配", "人群表达", "可读性"}
+    allowed_categories = {"合规风险", "合法性风险", "资质核验", "价值表达", "目标匹配", "人群表达", "可读性"}
     for item in items:
         if not isinstance(item, dict) or item.get("severity") not in {"高", "中", "低"} or item.get("category") not in allowed_categories:
             raise ModelReviewError("模型问题项格式错误")
@@ -104,10 +104,12 @@ def review_with_model(
     model: str,
     wire_api: str = "chat_completions",
     reasoning_effort: str = "",
+    timeout_seconds: int = 180,
+    industry: str = "通用",
 ) -> dict[str, Any]:
     if not api_key:
         raise ModelReviewError("未配置模型 API 密钥")
-    user_content = json.dumps({"广告文案": text, "目标人群": audience, "转化目标": goal}, ensure_ascii=False)
+    user_content = json.dumps({"广告文案": text, "目标人群": audience, "转化目标": goal, "行业类别": industry}, ensure_ascii=False)
     if wire_api == "responses":
         endpoint = f"{base_url.rstrip('/')}/responses"
         payload = {"model": model, "instructions": SYSTEM_PROMPT, "input": user_content, "store": False}
@@ -128,11 +130,11 @@ def review_with_model(
         raise ModelReviewError("不支持的接口类型")
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     try:
-        response = requests.post(endpoint, headers=headers, json=payload, timeout=45)
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout_seconds)
         if response.status_code == 400 and wire_api == "chat_completions":
             fallback_payload = dict(payload)
             fallback_payload.pop("response_format", None)
-            response = requests.post(endpoint, headers=headers, json=fallback_payload, timeout=45)
+            response = requests.post(endpoint, headers=headers, json=fallback_payload, timeout=timeout_seconds)
     except requests.Timeout as exc:
         raise ModelReviewError("模型服务响应超时，请稍后重试") from exc
     except requests.ConnectionError as exc:

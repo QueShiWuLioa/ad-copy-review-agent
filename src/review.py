@@ -8,6 +8,14 @@ RISK_TERMS = {
     "absolute_claim": ["最便宜", "全网第一", "百分百", "100%", "绝对有效", "永久有效"],
     "urgency_pressure": ["最后一天", "仅限今天", "错过不再", "立即抢购"],
 }
+LEGAL_RULES = {
+    "medical_guarantee": {"industries": {"医疗健康"}, "terms": ["根治", "治愈率", "药到病除", "无副作用", "包治"], "suggestion": "删除无法证实的疗效保证，并由具备资质的人员核验医疗广告要求。"},
+    "financial_guarantee": {"industries": {"金融服务"}, "terms": ["保本", "稳赚", "零风险", "保证收益", "稳赚不赔"], "suggestion": "删除保本或收益保证，补充必要风险提示并核验金融广告资质。"},
+    "education_guarantee": {"industries": {"教育培训"}, "terms": ["保过", "包就业", "保证提分", "必上岸", "不过退款"], "suggestion": "删除结果保证，改为可验证的课程内容或服务说明。"},
+    "privacy_violation": {"industries": {"通用", "电商零售", "医疗健康", "金融服务", "教育培训"}, "terms": ["无需授权获取手机号", "自动读取通讯录", "无需同意收集"], "suggestion": "删除未经同意收集个人信息的表述，并核验隐私授权流程。"},
+    "fake_engagement": {"industries": {"通用", "电商零售"}, "terms": ["刷单", "返现好评", "虚假评价"], "suggestion": "删除诱导虚假交易或评价的内容，并核验平台规则。"},
+}
+REGULATED_INDUSTRIES = {"医疗健康", "金融服务", "教育培训"}
 GOAL_CTAS = {
     "获取线索": ["立即咨询", "预约", "领取", "获取方案", "提交信息", "查看方案"],
     "促进购买": ["立即购买", "马上购买", "加入购物车", "领取优惠", "查看详情"],
@@ -26,7 +34,7 @@ class ReviewItem:
     suggestion: str
 
 
-def review_copy(text: str, audience: str = "", goal: str = "获取线索") -> dict:
+def review_copy(text: str, audience: str = "", goal: str = "获取线索", industry: str = "通用") -> dict:
     text = text.strip()
     if not text:
         raise ValueError("广告文案不能为空")
@@ -35,6 +43,12 @@ def review_copy(text: str, audience: str = "", goal: str = "获取线索") -> di
         hits = [term for term in terms if term.lower() in text.lower()]
         if hits:
             items.append(ReviewItem(code, "合规风险", "高", f"包含：{'、'.join(hits)}", "改为可验证、有条件限定的客观表述。"))
+    for code, rule in LEGAL_RULES.items():
+        hits = [term for term in rule["terms"] if term in text]
+        if hits and (industry in rule["industries"] or code in {"privacy_violation"}):
+            items.append(ReviewItem(code, "合法性风险", "高", f"包含：{'、'.join(hits)}", rule["suggestion"]))
+    if industry in REGULATED_INDUSTRIES:
+        items.append(ReviewItem("qualification_review", "资质核验", "低", f"当前选择的行业为“{industry}”", "上线前核对广告主主体资质、产品许可、证明材料及投放平台最新规则。"))
     if not any(term in text for term in CTA_TERMS):
         items.append(ReviewItem("missing_cta", "转化表达", "中", "未发现明确行动指令", f"补充适合“{goal}”的行动指令，例如“{GOAL_CTAS[goal][0]}”。"))
     elif not any(term in text for term in GOAL_CTAS[goal]):
@@ -50,7 +64,7 @@ def review_copy(text: str, audience: str = "", goal: str = "获取线索") -> di
     if audience.strip() and not any(part in text for part in re.findall(r"[\u4e00-\u9fff]{2,}", audience)):
         items.append(ReviewItem("audience_missing", "人群表达", "低", f"文案未明确体现目标人群“{audience}”", "补充目标人群或其典型场景，避免泛化表达。"))
         penalty += 6
-    return {"score": max(0, 100 - penalty), "items": [asdict(item) for item in items], "risk_count": sum(item.severity == "高" for item in items), "goal": goal}
+    return {"score": max(0, 100 - penalty), "items": [asdict(item) for item in items], "risk_count": sum(item.severity == "高" for item in items), "goal": goal, "industry": industry}
 
 
 def generate_variants(text: str, audience: str, goal: str) -> list[dict]:
