@@ -64,6 +64,10 @@ if run_model:
             st.session_state["model_review_signature"]=signature
     except ModelReviewError as exc:
         st.error(f"{exc}，已保留规则审核结果。")
+    except TypeError:
+        st.error("模型适配器版本与页面不一致，请同步更新 src/llm_review.py；已保留规则审核结果。")
+    except Exception:
+        st.error("智能审核发生未预期错误，已保留规则审核结果。请查看应用日志定位问题。")
 
 model_result=st.session_state.get("model_review_result") if st.session_state.get("model_review_signature")==signature else None
 result=model_result if use_model and model_result else rule_result
